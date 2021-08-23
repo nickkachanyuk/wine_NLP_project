@@ -1,0 +1,565 @@
+---
+title: "Modeling Assignment 1"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setup
+
+```{r}
+library(tidyverse)
+library(caret)
+library(e1071)
+
+wine <- read_rds("~/Data Science/Classes/DS 504/wk3/pinot.rds") %>% 
+  select(-taster_name) # no leakage!
+```
+
+
+## Feature Engineering and basic EDA pt1
+
+```{r}
+wine <- wine %>% mutate(lprice = log(price))
+
+wine <- wine %>% mutate(fyear=as.factor(year))
+
+
+# california, oregon, and burgundy tend to command higher prices than our three last provinces
+ggplot(wine, aes(province, lprice, fill=province)) + geom_boxplot()
+
+# california, oregon, and burgundy also tend to produce more wines over the years when compared to our last three provinces
+ggplot(wine, aes(fyear)) + geom_bar() + facet_wrap(~province)
+
+ggplot(wine, aes(province, points, fill=province)) + geom_boxplot()
+
+wine$province <- as.factor(wine$province)
+
+wine$description <- str_to_lower(wine$description)
+
+
+
+# lprice and fyear variables in my opinion can probably distinguish pretty well between our top 3 producing provinces vs our bottom 3
+# new variables should focus on distinguishing the least common regions
+```
+
+## Test/benchmark KNN
+
+```{r}
+wino <- wine %>% select(province, lprice, points, year, fyear)
+
+wino <- wino %>%
+  preProcess(method =c("BoxCox","center","scale"))%>%
+  predict(wino)
+
+set.seed(504)
+wino_index <-createDataPartition(wino$province, p = 0.8, list = FALSE)
+train <- wino[wino_index,]
+test <- wino[-wino_index,]
+
+
+control <-trainControl(method = "cv", number = 5, allowParallel = TRUE)
+
+require(caret) 
+library(doParallel) 
+cl <- makePSOCKcluster(detectCores()) 
+clusterEvalQ(cl, library(foreach)) 
+registerDoParallel(cl)
+
+fit <- train(province ~ .,
+             data = train,
+             method = "knn",
+             tuneLength = 15,
+             trControl = control,
+             na.action = na.pass,
+             metric="Kappa")
+
+stopCluster(cl)
+registerDoSEQ()# close multi-core cluster
+rm(cl)
+
+confusionMatrix(predict(fit, test),factor(test$province))
+```
+
+```{r}
+rm(control, fit, test, train, wino, wino_index)
+```
+
+## Feature Engineering pt2
+
+```{r}
+library(dplyr)
+library(tidytext)
+
+wine_bigrams <- wine %>% mutate(id = row_number())
+
+wine_bigrams <- wine_bigrams %>% select(id, province, lprice, points, year, fyear, description)
+
+wine_bigrams <- wine_bigrams %>%
+  unnest_tokens(bigram, description, token = "ngrams", n = 2)
+
+wine_bigrams %>% 
+  count(bigram, sort = TRUE)
+```
+
+```{r}
+library(tidyr)
+
+bigrams_separated <- wine_bigrams %>%
+  separate(bigram, c("word1", "word2"), sep = " ")
+
+custom <- add_row(stop_words, word = c("pinot","noir"), lexicon = "custom")
+
+bigrams_filtered <- bigrams_separated %>%
+  filter(!word1 %in% custom$word) %>%
+  filter(!word2 %in% custom$word)
+
+# new bigram counts:
+bigram_counts <- bigrams_filtered %>% 
+  count(word1, word2, sort = TRUE)
+
+bigram_counts
+```
+
+```{r}
+bigrams_united <- bigrams_filtered %>%
+  unite(bigram, word1, word2, sep = " ")
+
+bigrams_united
+```
+
+
+```{r}
+bigram_tf_idf <- bigrams_united %>%
+  count(province, bigram) %>%
+  bind_tf_idf(bigram, province, n) %>%
+  arrange(desc(tf_idf))
+
+bigram_tf_idf
+
+top_30_province <- bigram_tf_idf %>% group_by(province) %>% top_n(20)
+
+# Oregon top bigrams
+top_30_province %>% filter(province == "Oregon") %>% 
+ggplot(., aes(tf_idf, reorder(bigram, tf_idf))) + geom_col() + facet_wrap(~province)
+
+# California top bigrams
+top_30_province %>% filter(province == "California") %>% 
+ggplot(., aes(tf_idf, reorder(bigram, tf_idf))) + geom_col() + facet_wrap(~province)
+
+# Burgundy top bigrams
+top_30_province %>% filter(province == "Burgundy") %>% 
+ggplot(., aes(tf_idf, reorder(bigram, tf_idf))) + geom_col() + facet_wrap(~province)
+
+# New York top bigrams
+top_30_province %>% filter(province == "New_York") %>% 
+ggplot(., aes(tf_idf, reorder(bigram, tf_idf))) + geom_col() + facet_wrap(~province)
+
+# Casablanca Valley top bigrams
+top_30_province %>% filter(province == "Casablanca_Valley") %>% 
+ggplot(., aes(tf_idf, reorder(bigram, tf_idf))) + geom_col() + facet_wrap(~province)
+
+#Marlborough top bigrams
+top_30_province %>% filter(province == "Marlborough") %>% 
+ggplot(., aes(tf_idf, reorder(bigram, tf_idf))) + geom_col() + facet_wrap(~province)
+```
+
+## Bigram KNN
+
+```{r}
+wino_bigrams <- wine %>%
+  filter(!description %in% custom$word) %>%
+  mutate(willamette_valley =str_detect(description,"willamette valley")) %>%
+  mutate(bottle_age =str_detect(description,"bottle age")) %>%
+  mutate(cherry_fruit =str_detect(description,"cherry fruit")) %>%
+  mutate(french_oak =str_detect(description,"french oak")) %>%
+  mutate(dundee_hills =str_detect(description,"dundee hills")) %>%
+  mutate(bay_leaf =str_detect(description,"bay leaf")) %>%
+  mutate(black_tea =str_detect(description,"black tea")) %>%
+  mutate(appellation_blend =str_detect(description,"appellation blend")) %>%
+  mutate(black_raspberry =str_detect(description,"black raspberry")) %>%
+  mutate(forest_floor =str_detect(description,"forest floor")) %>%
+  mutate(wood_aging =str_detect(description,"wood aging")) %>%
+  mutate(grand_cru =str_detect(description,"grand cru")) %>%
+  mutate(dark_tannins =str_detect(description,"dark tannins")) %>%
+  mutate(dry_core =str_detect(description,"dry core")) %>%
+  mutate(premier_cru =str_detect(description,"premier cru")) %>%
+  mutate(cranberry_acidity =str_detect(description,"cranberry acidity")) %>%
+  mutate(finger_lakes =str_detect(description,"finger lakes")) %>%
+  mutate(sour_cherry =str_detect(description,"sour cherry")) %>%
+  mutate(fresh_green =str_detect(description,"fresh green")) %>%
+  mutate(berry_aromas =str_detect(description,"berry aromas")) %>%
+  mutate(leafy_red =str_detect(description,"leafy red")) %>%
+  mutate(finish_tastes =str_detect(description,"finish tastes")) %>%
+  mutate(silky_texture =str_detect(description,"silky texture")) %>%
+  mutate(medium_bodied =str_detect(description,"medium bodied")) %>%
+  mutate(button_mushrooms =str_detect(description,"button mushrooms")) %>%
+  mutate(vanilla_shadings =str_detect(description,"vanilla shadings")) %>%
+  mutate(saint_clairs =str_detect(description,"saint clair's"))
+
+wino_bigrams <- wino_bigrams %>% select(-c(price, description))
+```
+
+
+
+
+## KNN with bigrams
+
+```{r}
+wino_bigrams <- wino_bigrams %>%
+  preProcess(method =c("BoxCox","center","scale"))%>%
+  predict(wino_bigrams)
+
+set.seed(504)
+wino_bigrams_index <-createDataPartition(wino_bigrams$province, p = 0.8, list = FALSE)
+train <- wino_bigrams[wino_bigrams_index,]
+test <- wino_bigrams[-wino_bigrams_index,]
+
+
+control <-trainControl(method = "cv", number = 5, allowParallel = TRUE)
+
+require(caret) 
+library(doParallel) 
+cl <- makePSOCKcluster(detectCores()) 
+clusterEvalQ(cl, library(foreach)) 
+registerDoParallel(cl)
+
+fit <- train(province ~ .,
+             data = train,
+             method = "knn",
+             tuneLength = 15,
+             trControl = control,
+             na.action = na.pass,
+             metric="Kappa")
+
+stopCluster(cl)
+registerDoSEQ()# close multi-core cluster
+rm(cl)
+
+confusionMatrix(predict(fit, test),factor(test$province))
+
+# bigrams made improvements
+```
+
+```{r}
+rm(control, fit, test, train, wino_bigrams_index)
+```
+
+## Naive Bayes
+
+```{r}
+wino_bigrams <- wino_bigrams %>%
+  preProcess(method =c("BoxCox","center","scale"))%>%
+  predict(wino_bigrams)
+
+set.seed(504)
+wino_bigrams_index <-createDataPartition(wino_bigrams$province, p = 0.8, list = FALSE)
+train <- wino_bigrams[wino_bigrams_index,]
+test <- wino_bigrams[-wino_bigrams_index,]
+
+
+control <-trainControl(method = "cv", number = 5, allowParallel = TRUE)
+
+require(caret) 
+library(doParallel) 
+cl <- makePSOCKcluster(detectCores()) 
+clusterEvalQ(cl, library(foreach)) 
+registerDoParallel(cl)
+
+fit <- train(province ~ .,
+             data = train,
+             method = "naive_bayes",
+             tuneLength = 15,
+             trControl = control,
+             na.action = na.pass,
+             metric="Kappa")
+
+stopCluster(cl)
+registerDoSEQ()# close multi-core cluster
+rm(cl)
+
+confusionMatrix(predict(fit, test),factor(test$province))
+```
+
+
+## Feature engineering 3 (using bigrams that are not next to each other in text)
+```{r}
+library(SnowballC)
+library(tidytext)
+library(tidyverse)
+
+custom <- add_row(stop_words, word = c("pinot","noir"), lexicon = "custom")
+
+wine_pairwise <- wine %>%
+  mutate(id = row_number()) %>%
+  unnest_tokens(word, description, token = "words") %>%
+  filter(!word %in% custom$word)
+
+```
+
+```{r}
+library(widyr)
+
+wine_pairwise <- wine_pairwise %>%
+  mutate(id = as.numeric(id)) %>%
+  group_by(word) %>% 
+  mutate(word_count = n()) %>%
+  filter(word_count>=100) %>%
+  ungroup()
+
+wine_cors <- wine_pairwise %>%
+  group_by(id) %>%
+  group_modify(~ pairwise_cor(wine_pairwise, item = word, feature = province, value = word_count))
+```
+
+```{r}
+CA_cors <- wine_pairwise %>% filter(province == "California") %>% pairwise_cor(item = word, feature = id, value = word_count) %>% arrange(desc(correlation))
+
+OR_cors <- wine_pairwise %>% filter(province == "Oregon") %>% pairwise_cor(item = word, feature = id, value = word_count) %>% arrange(desc(correlation))
+
+Burgundy_cors <- wine_pairwise %>% filter(province == "Burgundy") %>% pairwise_cor(item = word, feature = id, value = word_count) %>% arrange(desc(correlation))
+
+Marlborough_cors <- wine_pairwise %>% filter(province == "Marlborough") %>% pairwise_cor(item = word, feature = id, value = word_count) %>% arrange(desc(correlation))
+
+Casablanca_cors <- wine_pairwise %>% filter(province == "Casablanca_Valley") %>% pairwise_cor(item = word, feature = id, value = word_count) %>% arrange(desc(correlation))
+
+NY_cors <- wine_pairwise %>% filter(province == "New_York") %>% pairwise_cor(item = word, feature = id, value = word_count) %>% arrange(desc(correlation))
+```
+
+
+## KNN model 1
+
+```{r}
+wine$description <- tolower(wine$description)
+
+wino <- wine %>%
+  mutate(lprice = log(price)) %>% # 
+  mutate(fyear=as.factor(year)) %>% # make year a factor variable 
+  mutate(chocolate = str_detect(description, "chocolate")) %>% # predicts Oregon
+  mutate(fruit = str_detect(description, "fruit")) %>% # predicts Oregon
+  mutate(cola = str_detect(description, "cola")) %>% # predicts Oregon
+  mutate(cherries = str_detect(description, "cherries")) %>% # predicts Oregon and Marlborough
+  mutate(bodied = str_detect(description, "bodied")) %>% # predicts California
+  mutate(nose = str_detect(description, "nose")) %>% # predicts California
+  mutate(texture = str_detect(description, "texture")) %>% # predicts California
+  mutate(pomegranate = str_detect(description, "pomegranate")) %>% # predicts California
+  mutate(dark = str_detect(description, "dark")) %>% # predicts California
+  mutate(aromas = str_detect(description, "aromas")) %>% # common in several provinces, but removing it lowers kappa
+  mutate(tea = str_detect(description, "tea")) %>% # predicts California
+  mutate(earthy = str_detect(description, "earthy")) %>% # predicts California
+  mutate(bottling = str_detect(description, "bottling")) %>% # predicts California
+  mutate(cinnamon = str_detect(description, "cinnamon")) %>% # predicts California
+  mutate(tannins = str_detect(description, "tannins")) %>% # predicts New York
+  mutate(concentrated = str_detect(description, "concentrated")) %>% # predicts New York
+  mutate(bright = str_detect(description, "bright")) %>% # predicts New York
+  mutate(red = str_detect(description, "red")) %>% # predicts New York and Bugundy
+  mutate(cherry = str_detect(description, "cherry")) %>% # predicts New York
+  mutate(dried = str_detect(description, "dried")) %>% # predicts New York
+  mutate(structure = str_detect(description, "structure")) %>% # predicts Burgundy
+  mutate(acidity = str_detect(description, "acidity")) %>% # predicts Burgundy
+  mutate(drink = str_detect(description, "drink")) %>% # predicts Burgundy and Marlborough
+  mutate(rich = str_detect(description, "rich")) %>% # predicts Burgundy
+  mutate(soft = str_detect(description, "soft")) %>% # predicts Burgundy
+  mutate(firm = str_detect(description, "firm")) %>% # predicts Burgundy
+  mutate(finish = str_detect(description, "finish")) %>% # predicts Casablanca Valley
+  mutate(plum = str_detect(description, "plum")) %>% # predicts Casablanca Valley
+  mutate(oak = str_detect(description, "oak")) %>% # predicts Casablanca Valley
+  mutate(note = str_detect(description, "note")) %>% # predicts Casablanca Valley
+  mutate(cuvee = str_detect(description, "cuvee")) %>% # predicts Oregon
+  mutate(whiff = str_detect(description, "whiff")) %>% # predicts Oregon
+  mutate(slate = str_detect(description, "slate")) %>% # predicts California
+  mutate(smoke = str_detect(description, "smoke")) %>% # predicts New York
+  mutate(pommard = str_detect(description, "pommard")) %>% # predicts Burgundy
+  mutate(silky = str_detect(description, "silky")) %>% # predicts Marlborough
+  mutate(crisp = str_detect(description, "crisp")) %>% # predicts Marlborough
+  mutate(supple = str_detect(description, "supple")) %>% # predicts Marlborough
+  mutate(california = str_detect(description, "california")) %>% # predicts California
+  mutate(burgundy = str_detect(description, "burgundy")) %>% # predicts Burgundy
+  mutate(oregon = str_detect(description, "oregon")) %>% # predicts Oregon
+  mutate(willamette_valley =str_detect(description,"willamette valley")) %>% # predicts Oregon
+  mutate(bottle_age =str_detect(description,"bottle age")) %>% # predicts Oregon
+  mutate(cherry_fruit =str_detect(description,"cherry fruit")) %>% # predicts Oregon
+  mutate(french_oak =str_detect(description,"french oak")) %>% # predicts Oregon
+  mutate(dundee_hills =str_detect(description,"dundee hills")) %>% # predicts Oregon
+  mutate(bay_leaf =str_detect(description,"bay leaf")) %>% # predicts California
+  mutate(black_tea =str_detect(description,"black tea")) %>% # predicts California
+  mutate(appellation_blend =str_detect(description,"appellation blend")) %>% # predicts California
+  mutate(black_raspberry =str_detect(description,"black raspberry")) %>% # predicts California
+  mutate(forest_floor =str_detect(description,"forest floor")) %>% # predicts California
+  mutate(wood_aging =str_detect(description,"wood aging")) %>% # predicts Burgundy
+  mutate(grand_cru =str_detect(description,"grand cru")) %>% # predicts Burgundy
+  mutate(dark_tannins =str_detect(description,"dark tannins")) %>% # predicts Burgundy
+  mutate(dry_core =str_detect(description,"dry core")) %>% # predicts Burgundy
+  mutate(premier_cru =str_detect(description,"premier cru")) %>% # predicts Burgundy
+  mutate(cranberry_acidity =str_detect(description,"cranberry acidity")) %>% # predicts New York
+  mutate(finger_lakes =str_detect(description,"finger lakes")) %>% # predicts New York
+  mutate(sour_cherry =str_detect(description,"sour cherry")) %>% # predicts New York
+  mutate(fresh_green =str_detect(description,"fresh green")) %>% # predicts New York
+  mutate(berry_aromas =str_detect(description,"berry aromas")) %>% # predicts Casablanca Valley
+  mutate(leafy_red =str_detect(description,"leafy red")) %>% # predicts Casablanca Valley
+  mutate(finish_tastes =str_detect(description,"finish tastes")) %>% # predicts Casablanca Valley
+  mutate(silky_texture =str_detect(description,"silky texture")) %>% # predicts Marlborough
+  mutate(medium_bodied =str_detect(description,"medium bodied")) %>% # predicts Marlborough
+  mutate(button_mushrooms =str_detect(description,"button mushrooms")) %>% # predicts Marlborough
+  mutate(vanilla_shadings =str_detect(description,"vanilla shadings")) %>% # predicts Marlborough
+  mutate(saint_clairs =str_detect(description,"saint clair's")) %>% # predicts Marlborough
+  select(-description, year)
+
+# Pre-Processing & Partitioning
+wino <- wino %>%
+  preProcess(method =c("BoxCox","center","scale"))%>%
+  predict(wino)
+
+ctrl <- trainControl(method = "cv", number = 5)
+set.seed(504)
+
+wine_index <- createDataPartition(wino$province, p = 0.80, list = FALSE)
+train <- wino[ wine_index, ]
+test <- wino[-wine_index, ]
+
+# KNN Model with tuneLength = 15
+fit1 <- train(province ~ .,
+             data = train, 
+             method = "knn",
+             tuneLength = 15,
+             metric = "Kappa",
+             trControl = ctrl)
+
+confusionMatrix(predict(fit1, test),factor(test$province))
+```
+```{r}
+rm(ctrl, test, train, wine_index, wino)
+```
+
+
+## KNN model 2 with new words (to increase detection of Marlborough, Casablanca, and NY)
+
+```{r}
+wine$description <- tolower(wine$description)
+
+wino <- wine %>%
+  mutate(lprice = log(price)) %>% # 
+  mutate(fyear=as.factor(year)) %>% # make year a factor variable 
+  mutate(chocolate = str_detect(description, "chocolate")) %>% # predicts Oregon
+  mutate(fruit = str_detect(description, "fruit")) %>% # predicts Oregon
+  mutate(cola = str_detect(description, "cola")) %>% # predicts Oregon
+  mutate(cherries = str_detect(description, "cherries")) %>% # predicts Oregon and Marlborough
+  mutate(bodied = str_detect(description, "bodied")) %>% # predicts California
+  mutate(nose = str_detect(description, "nose")) %>% # predicts California
+  mutate(texture = str_detect(description, "texture")) %>% # predicts California
+  mutate(pomegranate = str_detect(description, "pomegranate")) %>% # predicts California
+  mutate(dark = str_detect(description, "dark")) %>% # predicts California
+  mutate(aromas = str_detect(description, "aromas")) %>% # common in several provinces, but removing it lowers kappa
+  mutate(tea = str_detect(description, "tea")) %>% # predicts California
+  mutate(earthy = str_detect(description, "earthy")) %>% # predicts California
+  mutate(bottling = str_detect(description, "bottling")) %>% # predicts California
+  mutate(cinnamon = str_detect(description, "cinnamon")) %>% # predicts California
+  mutate(tannins = str_detect(description, "tannins")) %>% # predicts New York
+  mutate(concentrated = str_detect(description, "concentrated")) %>% # predicts New York
+  mutate(bright = str_detect(description, "bright")) %>% # predicts New York
+  mutate(red = str_detect(description, "red")) %>% # predicts New York and Bugundy
+  mutate(cherry = str_detect(description, "cherry")) %>% # predicts New York
+  mutate(dried = str_detect(description, "dried")) %>% # predicts New York
+  mutate(structure = str_detect(description, "structure")) %>% # predicts Burgundy
+  mutate(acidity = str_detect(description, "acidity")) %>% # predicts Burgundy
+  mutate(drink = str_detect(description, "drink")) %>% # predicts Burgundy and Marlborough
+  mutate(rich = str_detect(description, "rich")) %>% # predicts Burgundy
+  mutate(soft = str_detect(description, "soft")) %>% # predicts Burgundy
+  mutate(firm = str_detect(description, "firm")) %>% # predicts Burgundy
+  mutate(finish = str_detect(description, "finish")) %>% # predicts Casablanca Valley
+  mutate(plum = str_detect(description, "plum")) %>% # predicts Casablanca Valley
+  mutate(oak = str_detect(description, "oak")) %>% # predicts Casablanca Valley
+  mutate(note = str_detect(description, "note")) %>% # predicts Casablanca Valley
+  mutate(cuvee = str_detect(description, "cuvee")) %>% # predicts Oregon
+  mutate(whiff = str_detect(description, "whiff")) %>% # predicts Oregon
+  mutate(slate = str_detect(description, "slate")) %>% # predicts California
+  mutate(smoke = str_detect(description, "smoke")) %>% # predicts New York
+  mutate(pommard = str_detect(description, "pommard")) %>% # predicts Burgundy
+  mutate(silky = str_detect(description, "silky")) %>% # predicts Marlborough
+  mutate(crisp = str_detect(description, "crisp")) %>% # predicts Marlborough
+  mutate(supple = str_detect(description, "supple")) %>% # predicts Marlborough
+  mutate(california = str_detect(description, "california")) %>% # predicts California
+  mutate(burgundy = str_detect(description, "burgundy")) %>% # predicts Burgundy
+  mutate(oregon = str_detect(description, "oregon")) %>% # predicts Oregon
+  mutate(willamette_valley =str_detect(description,"willamette valley")) %>% # predicts Oregon
+  mutate(bottle_age =str_detect(description,"bottle age")) %>% # predicts Oregon
+  mutate(cherry_fruit =str_detect(description,"cherry fruit")) %>% # predicts Oregon
+  mutate(french_oak =str_detect(description,"french oak")) %>% # predicts Oregon
+  mutate(dundee_hills =str_detect(description,"dundee hills")) %>% # predicts Oregon
+  mutate(bay_leaf =str_detect(description,"bay leaf")) %>% # predicts California
+  mutate(black_tea =str_detect(description,"black tea")) %>% # predicts California
+  mutate(appellation_blend =str_detect(description,"appellation blend")) %>% # predicts California
+  mutate(black_raspberry =str_detect(description,"black raspberry")) %>% # predicts California
+  mutate(forest_floor =str_detect(description,"forest floor")) %>% # predicts California
+  mutate(wood_aging =str_detect(description,"wood aging")) %>% # predicts Burgundy
+  mutate(grand_cru =str_detect(description,"grand cru")) %>% # predicts Burgundy
+  mutate(dark_tannins =str_detect(description,"dark tannins")) %>% # predicts Burgundy
+  mutate(dry_core =str_detect(description,"dry core")) %>% # predicts Burgundy
+  mutate(premier_cru =str_detect(description,"premier cru")) %>% # predicts Burgundy
+  mutate(cranberry_acidity =str_detect(description,"cranberry acidity")) %>% # predicts New York
+  mutate(finger_lakes =str_detect(description,"finger lakes")) %>% # predicts New York
+  mutate(sour_cherry =str_detect(description,"sour cherry")) %>% # predicts New York
+  mutate(fresh_green =str_detect(description,"fresh green")) %>% # predicts New York
+  mutate(berry_aromas =str_detect(description,"berry aromas")) %>% # predicts Casablanca Valley
+  mutate(leafy_red =str_detect(description,"leafy red")) %>% # predicts Casablanca Valley
+  mutate(finish_tastes =str_detect(description,"finish tastes")) %>% # predicts Casablanca Valley
+  mutate(silky_texture =str_detect(description,"silky texture")) %>% # predicts Marlborough
+  mutate(medium_bodied =str_detect(description,"medium bodied")) %>% # predicts Marlborough
+  mutate(button_mushrooms =str_detect(description,"button mushrooms")) %>% # predicts Marlborough
+  mutate(vanilla_shadings =str_detect(description,"vanilla shadings")) %>% # predicts Marlborough
+  mutate(saint_clairs =str_detect(description,"saint clair's")) %>% # predicts Marlborough
+  mutate(blackberry=str_detect(description, "blackberry")) %>% #Marlborough
+  mutate(reserve=str_detect(description, "reserve")) %>%
+  mutate(enjoy=str_detect(description, "enjoy")) %>%
+  mutate(single=str_detect(description, "single")) %>%
+  mutate(barrel=str_detect(description, "barrel")) %>%
+  mutate(aged=str_detect(description, "aged")) %>%
+  mutate(smoked=str_detect(description, "smoked")) %>%
+  mutate(lightly=str_detect(description, "lightly")) %>%
+  mutate(violet=str_detect(description, "violet")) %>%
+  mutate(intriguing=str_detect(description, "intriguing")) %>%
+  mutate(rhubarb=str_detect(description, "rhubarb")) %>%
+  mutate(integrated=str_detect(description, "integrated")) %>% #Casablanca
+  mutate(baking=str_detect(description, "baking")) %>%
+  mutate(brambly=str_detect(description, "brambly")) %>%
+  mutate(nutmeg=str_detect(description, "nutmeg")) %>%
+  mutate(enjoy=str_detect(description, "enjoy")) %>%
+  mutate(minerality=str_detect(description, "minerality")) %>%
+  mutate(oregano=str_detect(description, "oregano")) %>% #NY
+  mutate(sharp=str_detect(description, "sharp")) %>%
+  mutate(peppery=str_detect(description, "peppery")) %>%
+  mutate(pencil=str_detect(description, "pencil")) %>%
+  mutate(pine=str_detect(description, "pine")) %>%
+  select(-description, year)
+
+# Pre-Processing & Partitioning
+wino <- wino %>%
+  preProcess(method =c("BoxCox","center","scale"))%>%
+  predict(wino)
+
+ctrl <- trainControl(method = "cv", number = 5)
+set.seed(42)
+
+wine_index <- createDataPartition(wino$province, p = 0.50, list = FALSE)
+train <- wino[ wine_index, ]
+test <- wino[-wine_index, ]
+
+# KNN Model with tuneLength = 15
+fit2 <- train(province ~ .,
+             data = train, 
+             method = "knn",
+             tuneLength = 15,
+             metric = "Kappa",
+             trControl = ctrl)
+
+confusionMatrix(predict(fit2, test),factor(test$province))
+```
+## comparing models against each other
+
+```{r}
+results <- resamples(list(fit1=fit1, fit2=fit2))
+
+summary(results)
+```

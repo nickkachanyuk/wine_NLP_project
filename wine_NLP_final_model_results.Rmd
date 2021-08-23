@@ -1,0 +1,191 @@
+---
+title: 'Modeling Assignment #1'
+author: "Nick, Maribel, & Colleen"
+date: "3/6/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setup
+
+```{r}
+# add libraries
+library(tidyverse)
+library(caret)
+wine <- read_rds("~/Data Science/Classes/DS 504/wk3/pinot.rds") %>% 
+  select(-taster_name) # no leakage!
+```
+
+
+## Feature Engineering
+
+```{r}
+wine$description <- tolower(wine$description) # make description words lower case
+
+wino <- wine %>%
+  mutate(lprice = log(price)) %>%  # transform price to a natural log scale
+  mutate(fyear = as.factor(year)) %>% # turn year into a factor variable
+  mutate(chocolate = str_detect(description, "chocolate")) %>% 
+  mutate(fruit = str_detect(description, "fruit")) %>%
+  mutate(cola = str_detect(description, "cola")) %>% 
+  mutate(cherries = str_detect(description, "cherries")) %>% 
+  mutate(bodied = str_detect(description, "bodied")) %>% 
+  mutate(nose = str_detect(description, "nose")) %>% 
+  mutate(texture = str_detect(description, "texture")) %>%
+  mutate(pomegranate = str_detect(description, "pomegranate")) %>% 
+  mutate(dark = str_detect(description, "dark")) %>% 
+  mutate(aromas = str_detect(description, "aromas")) %>% 
+  mutate(tea = str_detect(description, "tea")) %>% 
+  mutate(earthy = str_detect(description, "earthy")) %>% 
+  mutate(bottling = str_detect(description, "bottling")) %>% 
+  mutate(cinnamon = str_detect(description, "cinnamon")) %>% 
+  mutate(tannins = str_detect(description, "tannins")) %>% 
+  mutate(concentrated = str_detect(description, "concentrated")) %>%
+  mutate(bright = str_detect(description, "bright")) %>% 
+  mutate(red = str_detect(description, "red")) %>% 
+  mutate(cherry = str_detect(description, "cherry")) %>% 
+  mutate(dried = str_detect(description, "dried")) %>% 
+  mutate(structure = str_detect(description, "structure")) %>% 
+  mutate(acidity = str_detect(description, "acidity")) %>% 
+  mutate(drink = str_detect(description, "drink")) %>% 
+  mutate(rich = str_detect(description, "rich")) %>% 
+  mutate(soft = str_detect(description, "soft")) %>% 
+  mutate(firm = str_detect(description, "firm")) %>% 
+  mutate(finish = str_detect(description, "finish")) %>% 
+  mutate(plum = str_detect(description, "plum")) %>% 
+  mutate(oak = str_detect(description, "oak")) %>% 
+  mutate(note = str_detect(description, "note")) %>% 
+  mutate(cuvee = str_detect(description, "cuvee")) %>% 
+  mutate(whiff = str_detect(description, "whiff")) %>% 
+  mutate(slate = str_detect(description, "slate")) %>% 
+  mutate(smoke = str_detect(description, "smoke")) %>% 
+  mutate(pommard = str_detect(description, "pommard")) %>% 
+  mutate(silky = str_detect(description, "silky")) %>% 
+  mutate(crisp = str_detect(description, "crisp")) %>% 
+  mutate(supple = str_detect(description, "supple")) %>% 
+  mutate(california = str_detect(description, "california")) %>% 
+  mutate(burgundy = str_detect(description, "burgundy")) %>% 
+  mutate(oregon = str_detect(description, "oregon")) %>% 
+  mutate(willamette_valley = str_detect(description,"willamette valley")) %>% 
+  mutate(bottle_age = str_detect(description,"bottle age")) %>% 
+  mutate(cherry_fruit = str_detect(description,"cherry fruit")) %>% 
+  mutate(french_oak = str_detect(description,"french oak")) %>% 
+  mutate(dundee_hills = str_detect(description,"dundee hills")) %>% 
+  mutate(bay_leaf = str_detect(description,"bay leaf")) %>% 
+  mutate(black_tea = str_detect(description,"black tea")) %>% 
+  mutate(appellation_blend = str_detect(description,"appellation blend")) %>% 
+  mutate(black_raspberry = str_detect(description,"black raspberry")) %>% 
+  mutate(forest_floor = str_detect(description,"forest floor")) %>% 
+  mutate(wood_aging = str_detect(description,"wood aging")) %>%
+  mutate(grand_cru = str_detect(description,"grand cru")) %>% 
+  mutate(dark_tannins = str_detect(description,"dark tannins")) %>% 
+  mutate(dry_core = str_detect(description,"dry core")) %>% 
+  mutate(premier_cru = str_detect(description,"premier cru")) %>% 
+  mutate(cranberry_acidity = str_detect(description,"cranberry acidity")) %>% 
+  mutate(finger_lakes = str_detect(description,"finger lakes")) %>% 
+  mutate(sour_cherry = str_detect(description,"sour cherry")) %>%
+  mutate(fresh_green = str_detect(description,"fresh green")) %>% 
+  mutate(berry_aromas = str_detect(description,"berry aromas")) %>%
+  mutate(leafy_red = str_detect(description,"leafy red")) %>%
+  mutate(finish_tastes = str_detect(description,"finish tastes")) %>% 
+  mutate(silky_texture = str_detect(description,"silky texture")) %>% 
+  mutate(medium_bodied = str_detect(description,"medium bodied")) %>%
+  mutate(button_mushrooms = str_detect(description,"button mushrooms")) %>% 
+  mutate(vanilla_shadings = str_detect(description,"vanilla shadings")) %>% 
+  mutate(saint_clairs = str_detect(description,"saint clair's")) %>% 
+  mutate(blackberry = str_detect(description, "blackberry")) %>% 
+  mutate(reserve = str_detect(description, "reserve")) %>%
+  mutate(enjoy = str_detect(description, "enjoy")) %>%
+  mutate(single = str_detect(description, "single")) %>%
+  mutate(barrel = str_detect(description, "barrel")) %>%
+  mutate(aged = str_detect(description, "aged")) %>%
+  mutate(smoked = str_detect(description, "smoked")) %>%
+  mutate(lightly = str_detect(description, "lightly")) %>%
+  mutate(violet = str_detect(description, "violet")) %>%
+  mutate(intriguing = str_detect(description, "intriguing")) %>%
+  mutate(rhubarb = str_detect(description, "rhubarb")) %>%
+  mutate(integrated = str_detect(description, "integrated")) %>% 
+  mutate(baking = str_detect(description, "baking")) %>%
+  mutate(brambly = str_detect(description, "brambly")) %>%
+  mutate(nutmeg = str_detect(description, "nutmeg")) %>%
+  mutate(enjoy = str_detect(description, "enjoy")) %>%
+  mutate(minerality = str_detect(description, "minerality")) %>%
+  mutate(oregano = str_detect(description, "oregano")) %>% 
+  mutate(sharp = str_detect(description, "sharp")) %>%
+  mutate(peppery = str_detect(description, "peppery")) %>%
+  mutate(pencil = str_detect(description, "pencil")) %>%
+  mutate(pine = str_detect(description, "pine")) %>%
+  select(-c(description, year, price)) # Remove unnecessary variables
+```
+
+## Output
+
+```{r}
+# output the file you are going to upload to WISE along with this RMD file
+wino %>% write_rds(path = "pinot1.rds")
+```
+
+## Specification
+
+```{r}
+# Pre-Processing & Partitioning
+set.seed(42)
+
+wino <- wino %>%
+  preProcess(method =c("BoxCox","center","scale"))%>%
+  predict(wino)
+
+ctrl <- trainControl(method = "cv", number = 5)
+
+wine_index <- createDataPartition(wino$province, p = 0.5, list = FALSE)
+train <- wino[ wine_index, ]
+test <- wino[-wine_index, ]
+
+# KNN Model with tuneLength = 15
+fit <- train(province ~ .,
+             data = train, 
+             method = "knn",
+             tuneLength = 15,
+             metric = "Kappa",
+             trControl = ctrl)
+
+confusionMatrix(predict(fit, test),factor(test$province))
+```
+### Testing Code (second model with 0.8 split to compare to)
+
+```{r}
+# Pre-Processing & Partitioning
+set.seed(42)
+
+wino <- wino %>%
+  preProcess(method =c("BoxCox","center","scale"))%>%
+  predict(wino)
+
+ctrl <- trainControl(method = "cv", number = 5)
+
+wine_index <- createDataPartition(wino$province, p = 0.8, list = FALSE)
+train <- wino[ wine_index, ]
+test <- wino[-wine_index, ]
+
+# KNN Model with tuneLength = 15
+fit2 <- train(province ~ .,
+             data = train, 
+             method = "knn",
+             tuneLength = 15,
+             metric = "Kappa",
+             trControl = ctrl)
+
+confusionMatrix(predict(fit2, test),factor(test$province))
+```
+
+
+### Looking at the Accuracy and Kappa distribution for the two models
+
+```{r}
+results <- resamples(list(fit=fit, fit2=fit2))
+
+summary(results)
+```
